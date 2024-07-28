@@ -5,7 +5,7 @@ BASIC interpreter
 (c) 2013--2023 Rob Hagemans
 This file is released under the GNU GPL version 3 or later.
 """
-
+import inspect
 import struct
 
 from .base import error
@@ -13,6 +13,7 @@ from .base import tokens as tk
 from .base.tokens import DIGITS
 from .base import codestream
 from . import values
+from .parser.statements import ParserAsync
 
 
 class Interpreter(object):
@@ -755,3 +756,61 @@ class Interpreter(object):
         for handler in self._basic_events.all:
             if handler.gosub:
                 handler.set_jump(old_to_new[handler.gosub])
+
+
+class InterpreterAsync(Interpreter):
+    parser: ParserAsync
+
+    async def parse(self):
+        """Parse from the current pointer in current codestream."""
+        while True:
+            # update what basic events need to be handled
+            self._queues.set_basic_event_handlers(self._basic_events.enabled)
+            # check input and BASIC events. may raise Break, Reset or Exit
+            await self._queues.check_events()
+            try:
+                self.handle_basic_events()
+                ins = self.get_codestream()
+                self.current_statement = ins.tell()
+                c = ins.skip_blank_read()
+                # parse line number or : at start of statement
+                if c in tk.END_LINE:
+                    # line number marker, new statement
+                    token = ins.read(4)
+                    # end of program or truncated file
+                    if token[:2] == b'\0\0' or len(token) < 4:
+                        if c == b'\0' and self.error_resume:
+                            # unfinished error handler: no RESUME (don't trap this)
+                            self.error_handle_mode = True
+                            # get line number right
+                            raise error.BASICError(error.NO_RESUME, ins.tell()-len(token)-2)
+                        # stream has ended
+                        self.set_pointer(False)
+                        return
+                    if self.tron:
+                        linenum = struct.unpack_from('<H', token, 2)
+                        self._console.write(b'[%i]' % linenum)
+                    self.step(token)
+                elif c not in (b':', tk.THEN, tk.ELSE, tk.GOTO):
+                    # new statement or branch of an IF statement allowed, nothing else
+                    raise error.BASICError(error.STX)
+                res = self.parser.parse_statement(ins)
+                if inspect.iscoroutine(res):
+                    await res
+            except error.BASICError as e:
+                self.trap_error(e)
+
+    async def loop(self):
+        """Run commands until control returns to user."""
+        if not self.parse_mode:
+            return
+        try:
+            # parse until break or end
+            await self.parse()
+        except error.Break as e:
+            self._sound.stop_all_sound()
+            self._handle_break(e)
+        # move pointer to the start of direct line (for both on and off!)
+        self.set_pointer(False, 0)
+        # return control to user
+        self.set_parse_mode(False)

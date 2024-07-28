@@ -6,6 +6,6 @@ Keyboard, pen and joystick handling
 This file is released under the GNU GPL version 3 or later.
 """
 
-from .keyboard import Keyboard
+from .keyboard import Keyboard, KeyboardAsync
 from .pen import Pen
 from .stick import Stick

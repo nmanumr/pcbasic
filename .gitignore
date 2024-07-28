@@ -8,3 +8,4 @@ __pycache__/
 .idea/
 pcbasic/data/USAGE.txt
 pcbasic/basic/data/release.json
+.pyodide-xbuildenv

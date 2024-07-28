@@ -5,10 +5,10 @@ Keyboard handling
 (c) 2013--2023 Rob Hagemans
 This file is released under the GNU GPL version 3 or later.
 """
+import typing
 
 from collections import deque
 from contextlib import contextmanager
-
 from ...compat import iterchar, int2byte
 
 from ..base import error
@@ -17,6 +17,9 @@ from ..base import signals
 from ..base.eascii import as_bytes as ea
 from ..base.eascii import as_unicode as uea
 
+if typing.TYPE_CHECKING:
+    from ..eventcycle import EventQueues, EventQueuesAsync
+    from ..values import Values
 
 # bit flags for modifier keys - these are exposed via peek(1047) in low memory
 # sticky modifiers
@@ -83,9 +86,9 @@ class KeyboardBuffer(object):
         # if check_full is off, we pretend the ring buffer is infinite
         # this is for inserting keystrokes and pasting text into the emulator
         if cp_c:
-            if self._check_full and len(self._buffer) - self._start >= self._ring_length-1:
+            if self._check_full and len(self._buffer) - self._start >= self._ring_length - 1:
                 # when buffer is full, GW-BASIC inserts a \r at the end but doesn't count it
-                self._buffer[self._start-1] = (b'\r', scancode.RETURN)
+                self._buffer[self._start - 1] = (b'\r', scancode.RETURN)
                 # emit a sound signal; keystroke is dropped
                 self._queues.audio.put(signals.Event(signals.AUDIO_TONE, FULL_TONE))
             else:
@@ -158,8 +161,8 @@ class KeyboardBuffer(object):
         start -= len(self._buffer) - self._ring_length
         self._buffer = self._buffer[-self._ring_length:]
         # rotate so that the stop index is at the end
-        shift = len(self._buffer[start+length:])
-        self._buffer = self._buffer[start+length:] + self._buffer[:start+length]
+        shift = len(self._buffer[start + length:])
+        self._buffer = self._buffer[start + length:] + self._buffer[:start + length]
         start += shift
         start = start % self._ring_length
         # insert zeros before buffer to get the correct modulo
@@ -187,7 +190,7 @@ def _iter_keystrokes(ueascii_seq):
 class Keyboard(object):
     """Keyboard handling."""
 
-    def __init__(self, queues, values, codepage, check_full):
+    def __init__(self, queues: 'EventQueues', values: 'Values', codepage, check_full):
         """Initilise keyboard state."""
         self._values = values
         # needed for wait() in wait_char()
@@ -242,8 +245,8 @@ class Keyboard(object):
         # update ephemeral modifier status at every keypress
         # mods is a list of scancodes; OR together the known modifiers
         self.mod &= ~(
-            MODIFIER[scancode.CTRL] | MODIFIER[scancode.ALT] |
-            MODIFIER[scancode.LSHIFT] | MODIFIER[scancode.RSHIFT]
+                MODIFIER[scancode.CTRL] | MODIFIER[scancode.ALT] |
+                MODIFIER[scancode.LSHIFT] | MODIFIER[scancode.RSHIFT]
         )
         if mods:
             for m in mods:
@@ -264,7 +267,7 @@ class Keyboard(object):
         if (
                 self.mod & TOGGLE[scancode.CAPSLOCK]
                 and not self._ignore_caps and len(c) == 1
-            ):
+        ):
             c = c.swapcase()
         self.buf.append(self._codepage.unicode_to_bytes(c), scan)
 
@@ -276,10 +279,10 @@ class Keyboard(object):
             # switch off ephemeral modifiers
             self.mod &= ~MODIFIER[scan]
         except KeyError:
-           pass
+            pass
         # ALT+keycode
         if scan == scancode.ALT and self.keypad_ascii:
-            char = int2byte(int(self.keypad_ascii)%256)
+            char = int2byte(int(self.keypad_ascii) % 256)
             if char == b'\0':
                 char = b'\0\0'
             self.buf.append(char, None)
@@ -310,7 +313,7 @@ class Keyboard(object):
         """Set macro for given function key."""
         # NUL terminates macro string, rest is ignored
         # macro starting with NUL is empty macro
-        self._key_replace[num-1] = macro.split(b'\0', 1)[0]
+        self._key_replace[num - 1] = macro.split(b'\0', 1)[0]
 
     def get_macro(self, num):
         """Get macro for given function key."""
@@ -325,9 +328,9 @@ class Keyboard(object):
         # except if we're waiting for KYBD: input
         while (
                 (not self._expansion_vessel) and (self.buf.empty) and (
-                    keyboard_only or (not self._input_closed and not self._stream_buffer)
-                )
-            ):
+                keyboard_only or (not self._input_closed and not self._stream_buffer)
+        )
+        ):
             self._queues.wait()
 
     def _read_kybd_byte(self, expand=True):
@@ -393,11 +396,62 @@ class Keyboard(object):
         if not c and self._stream_buffer:
             c = self._stream_buffer.popleft()
             if (c in self._codepage.lead and self._stream_buffer and
-                        self._stream_buffer[0] in self._codepage.trail):
+                    self._stream_buffer[0] in self._codepage.trail):
                 c += self._stream_buffer.popleft()
         return c
 
     def get_fullchar_block(self, expand=True):
         """Read one (sbcs or dbcs) full character; blocking."""
         self.wait_char()
+        return self.get_fullchar(expand)
+
+
+class KeyboardAsync(Keyboard):
+    _queues: 'EventQueuesAsync'
+
+    async def read_bytes_block(self, n):
+        """Read bytes from keyboard or stream; blocking."""
+        word = []
+        for _ in range(n):
+            await self.wait_char(keyboard_only=False)
+            word.append(await self.read_byte())
+        return b''.join(word)
+
+    async def peek_byte_kybd_file(self):
+        """Peek from keyboard only; for KYBD: files; blocking."""
+        await self.wait_char(keyboard_only=True)
+        return self.buf.peek()
+
+    async def read_bytes_kybd_file(self, num):
+        """Read num bytes from keyboard only; for KYBD: files; blocking."""
+        word = []
+        for _ in range(num):
+            await self.wait_char(keyboard_only=True)
+            word.append(self._read_kybd_byte(expand=False))
+        return word
+
+    async def read_byte(self):
+        """Read one byte from keyboard or stream; nonblocking."""
+        # wait a tick to reduce load in loops
+        await self._queues.wait()
+        inkey = self._read_kybd_byte()
+        if not inkey and self._stream_buffer:
+            inkey = self._stream_buffer.popleft()
+        return inkey
+
+    async def wait_char(self, keyboard_only=False):
+        """wait until character appears in keyboard queue or stream."""
+        # if input stream has closed, don't wait but return empty
+        # which will tell the Editor to close
+        # except if we're waiting for KYBD: input
+        while (
+                (not self._expansion_vessel) and (self.buf.empty) and (
+                keyboard_only or (not self._input_closed and not self._stream_buffer)
+        )
+        ):
+            await self._queues.wait()
+
+    async def get_fullchar_block(self, expand=True):
+        """Read one (sbcs or dbcs) full character; blocking."""
+        await self.wait_char()
         return self.get_fullchar(expand)

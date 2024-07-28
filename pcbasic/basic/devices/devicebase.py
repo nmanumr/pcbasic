@@ -12,13 +12,14 @@ import struct
 import logging
 from contextlib import contextmanager
 
+from ..inputs import KeyboardAsync
 from ...compat import iterchar
 from ..base import error
 from ..base.eascii import as_bytes as ea
 from .. import values
 
 def nullstream():
-    return open(os.devnull, 'r+b')
+    return open(os.devnull, 'wb')
 
 
 # magic chars used by some devices to indicate file type
@@ -139,6 +140,18 @@ class KYBDDevice(Device):
         # open a master file on the keyboard
         Device.__init__(self)
         self.device_file = KYBDFile(keyboard, display)
+
+
+class KYBDDeviceAsync(Device):
+    """Keyboard device (KYBD:) """
+
+    allowed_modes = b'IR'
+
+    def __init__(self, keyboard, display):
+        """Initialise keyboard device."""
+        # open a master file on the keyboard
+        Device.__init__(self)
+        self.device_file = KYBDFileAsync(keyboard, display)
 
 
 #################################################################################
@@ -602,6 +615,47 @@ class KYBDFile(TextFileBase, RealTimeInputMixin):
         """Setting width on KYBD device (not files) changes screen width."""
         if self._is_master:
             self._display.set_width(new_width)
+
+
+class KYBDFileAsync(KYBDDevice):
+    _keyboard: KeyboardAsync
+
+    async def read(self, num):
+        """Read a number of characters (INPUT$)."""
+        # take at most num chars out of readahead buffer (holds just one on KYBD but anyway)
+        chars, self._readahead = b''.join(self._readahead[:num]), self._readahead[num:]
+        # fill up the rest with actual keyboard reads
+        while len(chars) < num:
+            chars += b''.join(
+                # note that INPUT$ on KYBD files replaces some eascii with NUL
+                b'\0' if c in KYBD_REPLACE else c if len(c) == 1 else b''
+                for c in await self._keyboard.read_bytes_kybd_file(num-len(chars))
+            )
+        return chars
+
+    async def read_one(self):
+        """Read a character with line ending replacement (INPUT and LINE INPUT)."""
+        # take char out of readahead buffer, if present; blocking keyboard read otherwise
+        if self._readahead:
+            chars, self._readahead = b''.join(self._readahead[:1]), self._readahead[1:]
+            return chars
+        else:
+            # note that we need string length, not list length
+            # as read_bytes_kybd_file can return multi-byte eascii codes
+            # blocking read
+            return b''.join(
+                # INPUT and LINE INPUT on KYBD files replace some eascii with control sequences
+                KYBD_REPLACE.get(c, c)
+                for c in await self._keyboard.read_bytes_kybd_file(1)
+            )
+
+    async def eof(self):
+        """KYBD only EOF if ^Z is read."""
+        if self.mode in (b'A', b'O'):
+            return False
+        # blocking peek
+        peeked_byte = await self._keyboard.peek_byte_kybd_file()
+        return peeked_byte == b'\x1A'
 
 
 ###############################################################################

@@ -5,12 +5,13 @@ Devices, Files and I/O operations
 (c) 2013--2023 Rob Hagemans
 This file is released under the GNU GPL version 3 or later.
 """
-
+import inspect
 import os
 import sys
 import logging
 import io
 
+from ..inputs import KeyboardAsync
 from ...compat import xrange, int2byte, text_type
 from ...compat import iterchar, iteritems, getcwdu
 from ...compat import split_quoted
@@ -24,7 +25,6 @@ from . import cassette
 from . import disk
 from . import ports
 from . import parports
-
 
 # MS-DOS device files
 DOS_DEVICE_FILES = (b'AUX', b'CON', b'NUL', b'PRN')
@@ -44,7 +44,7 @@ class Files(object):
             max_files, max_reclen, serial_buffer_size,
             device_params, current_device,
             codepage, text_mode, soft_linefeed
-        ):
+    ):
         """Initialise files."""
         # for wait() in files_
         self._queues = queues
@@ -79,7 +79,7 @@ class Files(object):
     def open(
             self, number, description, filetype, mode=b'I', access=b'', lock=b'',
             reclen=128, seg=0, offset=0, length=0
-        ):
+    ):
         """Open a file on a device specified by description."""
         if (not description) or (number < 0) or (number > self.max_files):
             # bad file number; also for name='', for some reason
@@ -127,7 +127,7 @@ class Files(object):
             self, values, queues, display, console, keyboard,
             device_params, current_device,
             serial_in_size, codepage, text_mode, soft_linefeed
-        ):
+    ):
         """Initialise devices."""
         device_params = self._normalise_params(device_params)
         # screen device, for files_()
@@ -168,7 +168,7 @@ class Files(object):
                 not current_device
                 or current_device not in device_params.keys()
                 or not device_params[current_device]
-            ):
+        ):
             if b'Z' in device_params and device_params[b'Z']:
                 # use z: if this is defined
                 current_device = b'Z'
@@ -322,7 +322,7 @@ class Files(object):
             if mode == b'A' and access == b'W':
                 raise error.BASICError(error.PATH_FILE_ACCESS_ERROR)
             elif ((mode == b'I' and access != b'R') or (mode == b'O' and access != b'W') or
-                    (mode == b'A' and access != b'RW')):
+                  (mode == b'A' and access != b'RW')):
                 raise error.BASICError(error.STX)
         error.range_check(1, self.max_reclen, reclen)
         # can't open file 0, or beyond max_files
@@ -359,7 +359,7 @@ class Files(object):
         pos = int(round(values.to_single(pos).to_value()))
         # not 2^32-1 as the manual boasts!
         # pos-1 needs to fit in a single-precision mantissa
-        error.range_check_err(1, 2**25, pos, err=error.BAD_RECORD_NUMBER)
+        error.range_check_err(1, 2 ** 25, pos, err=error.BAD_RECORD_NUMBER)
         return pos
 
     def put_(self, args):
@@ -394,7 +394,7 @@ class Files(object):
             lock_stop_rec = lock_start_rec
         else:
             lock_stop_rec = round(values.to_single(lock_stop_rec).to_value())
-        if lock_start_rec < 1 or lock_start_rec > 2**25-2 or lock_stop_rec < 1 or lock_stop_rec > 2**25-2:
+        if lock_start_rec < 1 or lock_start_rec > 2 ** 25 - 2 or lock_stop_rec < 1 or lock_stop_rec > 2 ** 25 - 2:
             raise error.BASICError(error.BAD_RECORD_NUMBER)
         return lock_start_rec, lock_stop_rec
 
@@ -590,7 +590,6 @@ class Files(object):
             raise error.BASICError(error.INPUT_PAST_END)
         return self._values.new_string().from_str(word)
 
-
     ###########################################################################
 
     def ioctl_(self, args):
@@ -622,14 +621,13 @@ class Files(object):
         error.range_check(0, 3, values.to_int(val))
         return self._values.new_integer()
 
-
     ###########################################################################
     # disk devices
 
     def _init_disk_devices(
             self, device_params, current_device,
             codepage, text_mode, soft_linefeed
-        ):
+    ):
         """Initialise disk devices."""
         # if Z not specified, mount to cwd by default (override by specifying 'Z': None)
         if b'Z' not in device_params:
@@ -753,10 +751,50 @@ class Files(object):
         if not output:
             raise error.BASICError(error.FILE_NOT_FOUND)
         # output files
-        for i, cols in enumerate(output[j:j+num_cols] for j in xrange(0, len(output), num_cols)):
+        for i, cols in enumerate(output[j:j + num_cols] for j in xrange(0, len(output), num_cols)):
             self._console.write_line(b' '.join(cols))
             if not (i % 4):
                 # allow to break during dir listing & show names flowing on screen
                 self._queues.wait()
             i += 1
         self._console.write_line(b' %d Bytes free\n' % dev.get_free())
+
+
+class FilesAsync(Files):
+    _keyboard: KeyboardAsync
+
+    def _init_devices(
+            self, values, queues, display, console, keyboard,
+            device_params, current_device,
+            serial_in_size, codepage, text_mode, soft_linefeed
+    ):
+        super()._init_devices(
+            values, queues, display, console, keyboard,
+            device_params, current_device,
+            serial_in_size, codepage, text_mode, soft_linefeed
+        )
+        self._devices[b'KYBD:'] = devicebase.KYBDDeviceAsync(keyboard, display)
+
+    async def input_(self, args):
+        """INPUT$: read num chars from file or keyboard."""
+        num = values.to_int(next(args))
+        error.range_check(1, 255, num)
+        filenum = next(args)
+        if filenum is not None:
+            filenum = values.to_int(filenum)
+            error.range_check(0, 255, filenum)
+            # raise BAD FILE MODE (not BAD FILE NUMBER) if the file is not open
+            read = self.get(filenum, mode=b'IR', not_open=error.BAD_FILE_MODE).read
+        else:
+            read = self._keyboard.read_bytes_block
+        list(args)
+        # read the chars
+        word = read(num)
+
+        if inspect.isawaitable(word):
+            word = await word
+
+        if len(word) < num:
+            # input past end
+            raise error.BASICError(error.INPUT_PAST_END)
+        return self._values.new_string().from_str(word)

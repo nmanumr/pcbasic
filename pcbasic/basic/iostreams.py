@@ -5,18 +5,14 @@ Input/output streams
 (c) 2014--2023 Rob Hagemans
 This file is released under the GNU GPL version 3 or later.
 """
-
-import logging
+import asyncio
 import threading
-import sys
 import time
-import io
 from contextlib import contextmanager
 
-from ..compat import WIN32, read_all_available, stdio, random_id, text_type
 from .base import signals
 from .codepage import CONTROL
-
+from ..compat import WIN32, read_all_available, stdio, random_id, text_type
 
 # sleep period for input thread
 # does not need to be very short as it reads multiple bytes in one cycle
@@ -169,7 +165,6 @@ class IOStreams(object):
         finally:
             self._active = False
 
-
     def _launch_input_thread(self):
         """Launch a thread to allow nonblocking reads on both Windows and Unix."""
         thread = threading.Thread(target=self._process_input, args=())
@@ -204,6 +199,46 @@ class IOStreams(object):
             self._input_streams.remove(stream)
 
 
+class IOStreamsAsync(IOStreams):
+    async def add_pipes(self, input=None, output=None):
+        """Add input/output pipes."""
+        await self._add_input_streams(*_make_iterable(input))
+        self._add_output_streams(*_make_iterable(output))
+
+    async def _add_input_streams(self, *input_streams):
+        """Attach input streams."""
+        if not input_streams:
+            return
+        first_streams = not self._input_streams
+        has_stdin = any(_stream.name == stdio.stdin.name for _stream in self._input_streams)
+        for stream in input_streams:
+            stream = self._get_wrapped_input_stream(stream)
+            if not (has_stdin and stream.name == stdio.stdin.name):
+                # include stdin stream at most once, others may be replicated
+                self._input_streams.append(stream)
+        if first_streams and self._input_streams:
+            await self._launch_input_thread()
+
+    async def _launch_input_thread(self):
+        """Launch a thread to allow nonblocking reads on both Windows and Unix."""
+        await self._process_input()
+
+    async def _process_input(self):
+        """Process input from streams."""
+        while True:
+            await asyncio.sleep(TICK)
+            if self._stop_threads:
+                return
+            if not self._active:
+                continue
+            for stream in self._input_streams:
+                instr = stream.read()
+                if instr is None:
+                    self._remove_closed_stream(stream)
+                elif instr:
+                    self._queues.inputs.put(signals.Event(signals.STREAM_CHAR, (instr,)))
+
+
 def _make_iterable(arg):
     """Make the argument iterable, don't iterate over files or strings."""
     if not arg:
@@ -215,7 +250,6 @@ def _make_iterable(arg):
     except TypeError:
         return (arg,)
     return arg
-
 
 
 class NonBlockingInputWrapper(object):

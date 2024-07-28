@@ -5,7 +5,7 @@ Session API
 (c) 2013--2023 Rob Hagemans
 This file is released under the GNU GPL version 3 or later.
 """
-
+import logging
 import os
 import io
 
@@ -188,6 +188,92 @@ class Session(object):
         """Set function to be called on interpreter step."""
         self.start()
         self._impl.interpreter.step = step_function
+
+
+class SessionAsync(Session):
+    def start(self):
+        return False
+
+    async def start_async(self):
+        """Start the session."""
+        if not self._impl:
+            logging.info('Starting implementation')
+            self._impl = implementation.ImplementationAsync(**self._kwargs)
+            await self._impl.init(**self._kwargs)
+            logging.info('done implementation')
+            return True
+        return False
+
+    async def attach(self, *args, **kwargs):
+        await self.start_async()
+        return super().attach(*args, **kwargs)
+
+    async def remove_pipes(self, *args, **kwargs):
+        await self.start_async()
+        return super().remove_pipes(*args, **kwargs)
+
+    async def evaluate(self, *args, **kwargs):
+        await self.start_async()
+        return super().evaluate(*args, **kwargs)
+
+    async def set_variable(self, *args, **kwargs):
+        await self.start_async()
+        return super().set_variable(*args, **kwargs)
+
+    async def get_variable(self, *args, **kwargs):
+        await self.start_async()
+        return super().get_variable(*args, **kwargs)
+
+    async def convert(self, *args, **kwargs):
+        await self.start_async()
+        return super().convert(*args, **kwargs)
+
+    async def press_keys(self, *args, **kwargs):
+        await self.start_async()
+        return super().press_keys(*args, **kwargs)
+
+    async def get_chars(self, *args, **kwargs):
+        await self.start_async()
+        return super().get_chars(*args, **kwargs)
+
+    async def get_pixels(self):
+        await self.start_async()
+        return super().get_pixels()
+
+    async def greet(self):
+        await self.start_async()
+        logging.info("greet execute")
+        await self._impl.execute(implementation.GREETING)
+        logging.info("greet execute done")
+
+    async def set_hook(self, step_function):
+        await self.start_async()
+        return super().set_hook(step_function)
+
+    async def execute(self, command, as_type=None):
+        await self.start_async()
+        if as_type is None:
+            as_type = type(command)
+        output = io.BytesIO() if as_type == bytes else io.StringIO()
+        with self._impl.io_streams.activate():
+            await self.add_pipes(output_streams=output)
+            for cmd in command.splitlines():
+                if isinstance(cmd, text_type):
+                    cmd = self._impl.codepage.unicode_to_bytes(cmd)
+                await self._impl.execute(cmd)
+            await self.remove_pipes(output_streams=output)
+        return output.getvalue()
+
+    async def add_pipes(self, input_streams=None, output_streams=None):
+        """Add input/output pipes to session."""
+        await self.start_async()
+        await self._impl.io_streams.add_pipes(input_streams, output_streams)
+
+    async def interact(self):
+        """Interactive interpreter session."""
+        await self.start_async()
+        with self._impl.io_streams.activate():
+            await self._impl.interact()
 
 
 class SessionInfo(object):

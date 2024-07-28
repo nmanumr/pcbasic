@@ -8,6 +8,7 @@ This file is released under the GNU GPL version 3 or later.
 
 import math
 import struct
+import typing
 import functools
 
 from ...compat import int2byte
@@ -17,6 +18,8 @@ from ..base import tokens as tk
 from . import numbers
 from . import strings
 
+if typing.TYPE_CHECKING:
+    from ..console import Console
 
 # BASIC type sigils:
 # Integer (%) - stored as two's complement, little-endian
@@ -155,7 +158,7 @@ class FloatErrorHandler(object):
     # types of errors that do not always interrupt execution
     soft_types = (error.OVERFLOW, error.DIVISION_BY_ZERO)
 
-    def __init__(self, console):
+    def __init__(self, console: 'Console'):
         """Setup handler."""
         self._console = console
         self._do_raise = False
