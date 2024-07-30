@@ -11,11 +11,11 @@ This file is released under the GNU GPL version 3 or later.
 import os
 import io
 import sys
-import tty
+# import tty
 import time
-import termios
+# import termios
 import select
-import fcntl
+# import fcntl
 import array
 import struct
 import atexit
@@ -256,7 +256,7 @@ class PosixConsole(object):
         # buffer to save termios state
         if not sys.stdin.isatty() or not sys.stdout.isatty():
             raise EnvironmentError('Not a terminal')
-        self._term_attr = termios.tcgetattr(sys.stdin.fileno())
+        # self._term_attr = termios.tcgetattr(sys.stdin.fileno())
         self._stdio = stdio
         # preserve original terminal size
         self._orig_size = self.get_size()
@@ -275,6 +275,7 @@ class PosixConsole(object):
 
     def get_size(self):
         """Get terminal size."""
+        return 25, 80
         try:
             return struct.unpack(
                 'HHHH', fcntl.ioctl(sys.stdout.fileno(), termios.TIOCGWINSZ, b'\0'*8)
@@ -284,11 +285,13 @@ class PosixConsole(object):
 
     def set_raw(self):
         """Enter raw terminal mode (no echo, don't exit on ctrl-C, ...)."""
-        tty.setraw(sys.stdin.fileno())
+        raise NotImplemented("")
+        # tty.setraw(sys.stdin.fileno())
 
     def unset_raw(self):
         """Leave raw terminal mode."""
-        termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self._term_attr)
+        raise NotImplemented("")
+        # termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self._term_attr)
 
 
     ##########################################################################
@@ -457,6 +460,7 @@ class PosixConsole(object):
 
 def _is_console_app():
     """To see if we are a console app, check if we can treat stdin like a tty, file or socket."""
+    return False
     if not sys.stdin.isatty():
         try:
             fcntl.ioctl(sys.stdin, termios.FIONREAD, _sock_size)
@@ -501,7 +505,8 @@ def read_all_available(stream):
         # fingers crossed this also works in Python 2
         return stream.read(0)
     # find number of bytes available (this always returns a count of *bytes*)
-    fcntl.ioctl(stream, termios.FIONREAD, _sock_size)
+    # fcntl.ioctl(stream, termios.FIONREAD, _sock_size)
+    raise NotImplemented("termios")
     count = _sock_size[0]
     # and read them all
     # note that count should not be zero unless the stream is closed

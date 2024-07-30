@@ -48,19 +48,21 @@ def get_platform_info():
             else:
                 info.append(u'%s: available' % module)
     info.append(u'\nLIBRARIES')
-    try:
-        from .interface import video_sdl2
-        video_sdl2._import_sdl2()
 
-        info.append(u'sdl2: %s' % (video_sdl2.sdl2.sdl2_lib.libfile,))
-        if video_sdl2:
-            info.append(u'sdl2_gfx: %s' % (video_sdl2.sdl2.gfx_lib.libfile, ))
-        else:
-            info.append(u'sdl2_gfx: --')
-    except ImportError as e:
-        raise
-        info.append(u'sdl2: --')
-        sdl2 = None
+    if not EMSCRIPTEN:
+        try:
+            from .interface import video_sdl2
+            video_sdl2._import_sdl2()
+
+            info.append(u'sdl2: %s' % (video_sdl2.sdl2.sdl2_lib.libfile,))
+            if video_sdl2:
+                info.append(u'sdl2_gfx: %s' % (video_sdl2.sdl2.gfx_lib.libfile, ))
+            else:
+                info.append(u'sdl2_gfx: --')
+        except ImportError as e:
+            raise
+            info.append(u'sdl2: --')
+            sdl2 = None
     info.append(u'\nEXTERNAL TOOLS')
     tools = (u'notepad', u'lpr', u'paps', u'beep', u'pbcopy', u'pbpaste')
     for tool in tools:

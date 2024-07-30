@@ -5,8 +5,10 @@ Event queue handling
 (c) 2013--2023 Rob Hagemans
 This file is released under the GNU GPL version 3 or later.
 """
-
+import asyncio
+import inspect
 import time
+from queue import Queue
 
 from ..compat import queue
 
@@ -15,7 +17,6 @@ from .base import scancode
 from .base import signals
 from .base.eascii import as_bytes as ea
 from .base.eascii import as_unicode as uea
-
 
 # F12 emulator home-key
 # also f12+b -> ctrl+break
@@ -57,23 +58,32 @@ HOME_KEY_REPLACEMENTS_EASCII = {
 
 class NullQueue(object):
     """Dummy implementation of Queue interface."""
+
     def __init__(self, maxsize=0):
         pass
+
     def qsize(self):
         return 0
+
     def empty(self):
         return True
+
     def full(self):
         return False
+
     def put(self, item, block=False, timeout=False):
         pass
+
     def put_nowait(self, item):
         pass
+
     def get(self, block=False, timeout=False):
         # we're ignoring block
         raise queue.Empty
+
     def task_done(self):
         pass
+
     def join(self):
         pass
 
@@ -83,7 +93,8 @@ class EventQueues(object):
 
     tick = 0.006
     max_video_qsize = 200
-    #max_audio_qsize = 20
+
+    # max_audio_qsize = 20
 
     def __init__(self, ctrl_c_is_break, inputs=None, video=None, audio=None):
         """Initialise; default is NullQueues."""
@@ -97,6 +108,12 @@ class EventQueues(object):
         self._ctrl_c_is_break = ctrl_c_is_break
         # F12 replacement events
         self._f12_active = False
+
+        # Only set for typing
+        self.audio: Queue = None
+        self.inputs: Queue = None
+        self.video: Queue = None
+
         self.set(inputs, video, audio)
 
     def set(self, inputs=None, video=None, audio=None):
@@ -214,7 +231,7 @@ class EventQueues(object):
             # pause key handling
             # to ensure this key remains trappable
             elif (scan == scancode.BREAK or
-                    (scan == scancode.NUMLOCK and scancode.CTRL in mod)):
+                  (scan == scancode.NUMLOCK and scancode.CTRL in mod)):
                 self._pause = True
                 return True
         return False
@@ -241,3 +258,72 @@ class EventQueues(object):
                     signal.params = c, scan, mod
         elif (signal.event_type == signals.KEYB_UP) and (signal.params[0] == scancode.F12):
             self._f12_active = False
+
+
+class EventQueuesAsync(EventQueues):
+    def set(self, inputs=None, video=None, audio=None):
+        """Set; default is NullQueues."""
+        super().set(inputs, video, audio)
+
+        if hasattr(self.audio, 'put_nowait'):
+            self.audio.put_wait = self.audio.put
+            self.audio.put = self.audio.put_nowait
+
+        if hasattr(self.video, 'put_nowait'):
+            self.video.put_wait = self.video.put
+            self.video.put = self.video.put_nowait
+
+        if hasattr(self.inputs, 'put_nowait'):
+            self.inputs.put_wait = self.inputs.put
+            self.inputs.put = self.inputs.put_nowait
+
+    async def wait(self):
+        """Wait and check events."""
+        await asyncio.sleep(self.tick)
+        await self.check_events()
+
+    async def check_events(self):
+        """Main event cycle."""
+        # sleep(0) is needed for responsiveness, e.g. event trapping in programs with tight loops
+        # i.e. 100 goto 100 with event traps active) - needed to allow the input queue to fill
+        # this also allows the screen to update between statements
+        # it does slow the interpreter down by about 20% in FOR loops
+        # note that we always have an input queue, either for the interface of for iostreams
+        await asyncio.sleep(0)
+
+        if self.video.qsize() > self.max_video_qsize:
+            while self.video.qsize():
+                await asyncio.sleep(self.tick)
+        await self._check_input()
+
+    async def _check_input(self):
+        """Handle input events."""
+        while True:
+            # pop input queues
+            try:
+                signal = self.inputs.get_nowait()
+            except asyncio.QueueEmpty:
+                if self._pause:
+                    await asyncio.sleep(self.tick)
+                    continue
+                else:
+                    # we still need to handle basic events: not all are inputs
+                    for e in self._basic_handlers:
+                        e.check_input(signals.Event(None))
+                    break
+            self.inputs.task_done()
+            # effect replacements
+            self._replace_inputs(signal)
+            # handle input events
+            for handle_input in (
+                    [self._handle_non_trappable_interrupts] +
+                    [e.check_input for e in self._basic_handlers] +
+                    [self._handle_trappable_interrupts] +
+                    [e.check_input for e in self._handlers]
+            ):
+                res = handle_input(signal)
+                if inspect.iscoroutine(res):
+                    res = await res
+
+                if res:
+                    break

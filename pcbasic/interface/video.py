@@ -5,7 +5,7 @@ Base class for video plugins
 (c) 2013--2023 Rob Hagemans
 This file is released under the GNU GPL version 3 or later.
 """
-
+import asyncio
 import time
 
 from ..compat import queue
@@ -55,8 +55,11 @@ class VideoPlugin(object):
         """Drain signal queue."""
         while True:
             try:
-                signal = self._video_queue.get(False)
-            except queue.Empty:
+                if type(self._video_queue) is asyncio.Queue:
+                    signal = self._video_queue.get_nowait()
+                else:
+                    signal = self._video_queue.get(False)
+            except (queue.Empty, asyncio.QueueEmpty):
                 return True
             # putting task_done before the execution avoids hanging on join() after an exception
             self._video_queue.task_done()

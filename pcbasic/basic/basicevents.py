@@ -13,6 +13,7 @@ from .base import error
 from .base import tokens as tk
 from .base import signals
 from . import values
+from .sound import SoundAsync
 
 
 ###############################################################################
@@ -191,6 +192,12 @@ class BasicEvents(object):
             self.com[comnum-1].set_jump(jumpnum)
 
 
+class BasicEventsAsync(BasicEvents):
+    def reset(self):
+        super().reset()
+        self.play = PlayHandlerAsync(self._sound)
+
+
 class EventHandler(object):
     """Manage event triggers."""
 
@@ -243,6 +250,22 @@ class PlayHandler(EventHandler):
     def set_trigger(self, n):
         """Set PLAY trigger to n notes."""
         self.trig = n
+
+
+class PlayHandlerAsync(PlayHandler):
+    _sound: SoundAsync
+
+    async def check_input(self, signal):
+        """Check and trigger PLAY (music queue) events."""
+        play_now = await self._sound.tones_waiting()
+        if self._sound.multivoice:
+            if (self.last > play_now and play_now < self.trig):
+                self.trigger()
+        else:
+            if (self.last >= self.trig and play_now < self.trig):
+                self.trigger()
+        self.last = play_now
+        return False
 
 
 class TimerHandler(EventHandler):

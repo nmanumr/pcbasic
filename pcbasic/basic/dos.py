@@ -16,6 +16,8 @@ from collections import deque
 import subprocess
 from subprocess import Popen, PIPE
 
+from .eventcycle import EventQueuesAsync
+from .inputs import KeyboardAsync
 from ..compat import OEM_ENCODING, HIDE_WINDOW, PY2
 from ..compat import which, split_quoted, getenvu, setenvu, iterenvu
 from .codepage import CONTROL
@@ -296,3 +298,90 @@ class Shell(object):
             unicode_reply = unicode_reply[len(self._last_command):]
         self._last_command = u''
         return unicode_reply
+
+
+class ShellAsync(Shell):
+    _queues: EventQueuesAsync
+    _keyboard: KeyboardAsync
+
+    async def _communicate(self, p, shell_output, shell_cerr):
+        """Communicate with launched shell."""
+        word = []
+        while p.poll() is None:
+            # stderr output should come first
+            # e.g. first print the error message (tsderr), then the prompt (stdout)
+            self._show_output(shell_cerr, remove_echo=False)
+            self._show_output(shell_output, remove_echo=True)
+            try:
+                await self._queues.wait()
+                # expand=False suppresses key macros
+                c = self._keyboard.get_fullchar(expand=False)
+            except error.Break:
+                c = None
+                pass
+            if not c:
+                continue
+            elif c in (b'\r', b'\n'):
+                self._console.write(c)
+                # send the command
+                self._send_input(p.stdin, word)
+                word = []
+            elif c == b'\b':
+                # handle backspace
+                if word:
+                    word.pop()
+                    self._console.write(b'\x1D \x1D')
+            elif not c.startswith(b'\0'):
+                # exclude e-ascii (arrow keys not implemented)
+                word.append(c)
+                self._console.write(c)
+        # drain final output
+        self._drain_final(shell_cerr, remove_echo=False)
+        self._drain_final(shell_output, remove_echo=True)
+
+    async def launch(self, command):
+        """Run a SHELL subprocess."""
+        logging.debug('Executing SHELL command `%r` with command interpreter `%s`', command, self._shell)
+        if not self._shell:
+            logging.warning('SHELL statement not enabled: no command interpreter specified.')
+            raise error.BASICError(error.IFC)
+        # split by whitespace
+        cmd = split_quoted(self._shell, quote=u'"', strip_quotes=True)
+        # find executable on path
+        cmd[0] = which(cmd[0], path='.' + os.pathsep + os.environ.get("PATH"))
+        if not cmd[0]:
+            logging.warning(u'SHELL: command interpreter `%s` not found.', self._shell)
+            raise error.BASICError(error.IFC)
+        if command:
+            cmd += [SHELL_COMMAND_SWITCH, self._codepage.bytes_to_unicode(command, box_protect=False)]
+        # get working directory; also raises IFC if current_device is CAS1
+        work_dir = self._files.get_native_cwd() or '.'
+        try:
+            p = Popen(
+                cmd, shell=False, cwd=work_dir,
+                stdin=PIPE, stdout=PIPE, stderr=PIPE,
+                # first try with HIDE_WINDOW to avoid ugly command window popping up on windows
+                startupinfo=HIDE_WINDOW
+            )
+        except EnvironmentError:
+            try:
+                # HIDE_WINDOW not allowed on Windows when called from console
+                p = Popen(
+                    cmd, shell=False, cwd=work_dir,
+                    stdin=PIPE, stdout=PIPE, stderr=PIPE,
+                )
+            except EnvironmentError as err:
+                logging.warning(
+                    u'SHELL: command interpreter `%s` not accessible: %s', self._shell, err
+                )
+                raise error.BASICError(error.IFC)
+        shell_output = self._launch_reader_thread(p.stdout)
+        shell_cerr = self._launch_reader_thread(p.stderr)
+        try:
+            await self._communicate(p, shell_output, shell_cerr)
+        except EnvironmentError as e:
+            logging.warning(e)
+        finally:
+            # ensure the process is terminated on exit
+            if p.poll() is None:
+                p.kill()

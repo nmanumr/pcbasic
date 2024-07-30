@@ -9,6 +9,8 @@ This file is released under the GNU GPL version 3 or later.
 import struct
 import logging
 
+from .modes import GraphicsMode
+from ..eventcycle import EventQueuesAsync
 from ...compat import iteritems
 from ..base import signals
 from ..base import error
@@ -46,7 +48,7 @@ class Display(object):
         self._monitor = monitor
         self._video_mem_size = video_mem_size
         # prepare video modes
-        self.mode = modes.get_mode(
+        self.mode: GraphicsMode = modes.get_mode(
             0, initial_width, self._adapter, self._monitor, self._video_mem_size
         )
         # video mode settings
@@ -112,6 +114,9 @@ class Display(object):
     def vpage(self):
         """Visible-page video buffers."""
         return self.pages[self.vpagenum]
+
+    def _put_video_queue(self, item):
+        self._queues.video.put(item)
 
     ###########################################################################
     # video modes
@@ -224,7 +229,7 @@ class Display(object):
             for _pagenum in range(self.mode.num_pages)
         ]
         # submit the mode change to the interface
-        self._queues.video.put(signals.Event(
+        self._put_video_queue(signals.Event(
             signals.VIDEO_SET_MODE, (
                 new_mode.pixel_height, new_mode.pixel_width,
                 new_mode.height, new_mode.width
@@ -284,7 +289,7 @@ class Display(object):
     def rebuild(self):
         """Completely resubmit the screen to the interface."""
         # set the screen mode
-        self._queues.video.put(signals.Event(
+        self._put_video_queue(signals.Event(
             signals.VIDEO_SET_MODE, (
                 self.mode.pixel_height, self.mode.pixel_width,
                 self.mode.height, self.mode.width
@@ -293,7 +298,7 @@ class Display(object):
         # rebuild palette
         self.colourmap.submit()
         # set the border
-        self._queues.video.put(signals.Event(signals.VIDEO_SET_BORDER_ATTR, (self._border_attr,)))
+        self._put_video_queue(signals.Event(signals.VIDEO_SET_BORDER_ATTR, (self._border_attr,)))
         # redraw the text screen and submit to interface
         for page in self.pages:
             page.resubmit()
@@ -372,7 +377,7 @@ class Display(object):
         """Set the border attribute."""
         fore, _, _, _ = self.colourmap.split_attr(attr)
         self._border_attr = fore
-        self._queues.video.put(signals.Event(signals.VIDEO_SET_BORDER_ATTR, (fore,)))
+        self._put_video_queue(signals.Event(signals.VIDEO_SET_BORDER_ATTR, (fore,)))
 
     def get_border_attr(self):
         """Get the border attribute, in range 0 <= attr < 16."""
@@ -533,3 +538,29 @@ class Display(object):
             # clear_view will clear the whole screen if the view is not set
             self.text_screen.clear_view()
             self.graphics.reset()
+
+
+class DisplayAsync(Display):
+    _queues: EventQueuesAsync
+
+    async def palette_(self, args):
+        """PALETTE: assign colour to attribute."""
+        attrib = next(args)
+        if attrib is not None:
+            attrib = values.to_int(attrib)
+        colour = next(args)
+        if colour is not None:
+            colour = values.to_int(colour)
+        list(args)
+        # wait a tick to make colour cycling loops work
+        await self._queues.wait()
+        if attrib is None and colour is None:
+            self.colourmap.set_all(self.colourmap.default_palette)
+        else:
+            # can't set blinking colours separately
+            error.range_check(0, self.colourmap.num_palette-1, attrib)
+            # numbers 255 and up are in fact allowed, 255 -> -1, 256 -> 0, etc
+            colour = -1 + (colour + 1) % 256
+            error.range_check(-1, self.colourmap.num_colours-1, colour)
+            if colour != -1:
+                self.colourmap.set_entry(attrib, colour)

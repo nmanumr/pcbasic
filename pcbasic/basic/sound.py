@@ -9,6 +9,9 @@ This file is released under the GNU GPL version 3 or later.
 from collections import deque
 import datetime
 
+from .eventcycle import EventQueues, EventQueuesAsync
+from .memory import DataSegment
+from .values import Values
 from ..compat import iterchar, zip
 from .base import error
 from .base import signals
@@ -50,7 +53,7 @@ TICK_LENGTH = 0x1234DC / 65536.
 class Sound(object):
     """Sound queue manipulations."""
 
-    def __init__(self, queues, values, memory, syntax):
+    def __init__(self, queues: EventQueues, values: Values, memory: DataSegment, syntax):
         """Initialise sound queue."""
         # for wait() and queues
         self._queues = queues
@@ -409,6 +412,24 @@ class Sound(object):
             self._wait(0 if self._multivoice else 1)
         else:
             self._wait_background()
+
+
+class SoundAsync(Sound):
+    _queues: EventQueuesAsync
+
+    def __init__(self, queues: EventQueuesAsync, values: Values, memory: DataSegment, syntax):
+        super().__init__(queues, values, memory, syntax)
+
+    async def _wait_background(self):
+        """Wait until the background queue becomes available."""
+        # 32 plus one playing
+        await self._wait(BACKGROUND_BUFFER_LENGTH+1)
+
+    async def _wait(self, wait_length):
+        """Wait until queue is shorter than or equal to given length."""
+        # top of queue is the currently playing tone or gap
+        while max(len(queue) for queue in self._voice_queue) > wait_length:
+            await self._queues.wait()
 
 
 class PlayState(object):

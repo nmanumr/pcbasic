@@ -5,7 +5,7 @@ Statement parser
 (c) 2013--2023 Rob Hagemans
 This file is released under the GNU GPL version 3 or later.
 """
-
+import inspect
 import logging
 import struct
 from functools import partial
@@ -1554,3 +1554,34 @@ class Parser(object):
             # done if we're not jumping into a comma'ed NEXT
             if not ins.skip_blank_read_if((b',')):
                 break
+
+class ParserAsync(Parser):
+    async def parse_statement(self, ins):
+        """Parse and execute a single statement."""
+        # read keyword token or one byte
+        ins.skip_blank()
+        c = ins.read_keyword_token()
+        if c in self._simple:
+            parse_args = self._simple[c]
+        elif c in self._complex:
+            stat_dict = self._complex[c]
+            ins.skip_blank()
+            selector = ins.read_keyword_token()
+            ins.seek(-len(selector), 1)
+            if selector not in stat_dict.keys():
+                selector = None
+            else:
+                c += selector
+            parse_args = stat_dict[selector]
+        else:
+            ins.seek(-len(c), 1)
+            if c in set(iterchar(LETTERS)):
+                # implicit LET
+                c = tk.LET
+                parse_args = self._simple[tk.LET]
+            else:
+                ins.require_end()
+                return
+        res = self._callbacks[c](parse_args(ins))
+        if inspect.iscoroutine(res):
+            await res

@@ -9,6 +9,7 @@ This file is released under the GNU GPL version 3 or later.
 import struct
 import logging
 
+from .eventcycle import EventQueuesAsync
 from ..compat import iteritems, int2byte
 
 from .data import NAME, VERSION, COPYRIGHT
@@ -265,6 +266,26 @@ class MachinePorts(object):
             self._queues.wait()
 
 
+class MachinePortsAsync(MachinePorts):
+    _queues: EventQueuesAsync
+
+    async def wait_(self, args):
+        """WAIT: wait for a machine port."""
+        addr = values.to_int(next(args), unsigned=True)
+        ander = values.to_int(next(args))
+        error.range_check(0, 255, ander)
+        xorer = next(args)
+        if xorer is None:
+            xorer = 0
+        else:
+            xorer = values.to_int(xorer)
+        error.range_check(0, 255, xorer)
+        list(args)
+        while (self.inp(addr) ^ xorer) & ander == 0:
+            await self._queues.wait()
+
+
+
 ###############################################################################
 # Memory
 
@@ -503,17 +524,17 @@ class Memory(object):
         if addr == 0xfffe:
             # machine ID byte
             # see http://stanislavs.org/helppc/id_bytes.html
-            # FF	Original IBM PC  4/24/81
-    		# FE	IBM XT (Original)
-    		# FD	PCjr
-    		# FC	IBM AT, XT 286, PS/1, PS/2 Model 50/60
-    		# FB	IBM 256/640K XT (aka XT/2)
-    		# FA	IBM PS/2 Model 30
-    		# F9	IBM PC Convertible
-    		# F8	IBM PS/2 Model 80/70
-    		# B6    Hewlett Packard 110
-    		# 9A	Compaq Plus
-    		# 2D	Compaq PC
+            # FF    Original IBM PC  4/24/81
+            # FE    IBM XT (Original)
+            # FD    PCjr
+            # FC    IBM AT, XT 286, PS/1, PS/2 Model 50/60
+            # FB    IBM 256/640K XT (aka XT/2)
+            # FA    IBM PS/2 Model 30
+            # F9    IBM PC Convertible
+            # F8    IBM PS/2 Model 80/70
+            # B6    Hewlett Packard 110
+            # 9A    Compaq Plus
+            # 2D    Compaq PC
             # most clones including Tandy return FF (IBM PC) for compatibility
             # http://nerdlypleasures.blogspot.co.uk/2012/06/ibm-pcjr-and-tandy-1000-games.html
             if self._syntax == 'pcjr':

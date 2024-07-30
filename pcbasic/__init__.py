@@ -10,5 +10,5 @@ from . import compat
 
 from .basic import __version__
 from .basic import NAME, VERSION, AUTHOR, COPYRIGHT
-from .basic import Session, codepage, font
+from .basic import Session, SessionAsync, codepage, font
 from .main import main, script_entry_point_guard

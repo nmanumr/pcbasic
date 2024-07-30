@@ -9,7 +9,7 @@ This file is released under the GNU GPL version 3 or later.
 import os
 import sys
 import platform
-
+import time
 
 # Python major version
 PY2 = sys.version_info.major == 2
@@ -17,6 +17,7 @@ PY2 = sys.version_info.major == 2
 # platform constants
 WIN32 = sys.platform == 'win32'
 MACOS = sys.platform == 'darwin'
+EMSCRIPTEN = sys.platform == 'emscripten'
 
 # 64-bit (needed for Windows binary modules)
 X64 = platform.architecture()[0] == '64bit'
